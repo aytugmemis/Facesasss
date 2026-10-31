@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<title>Yüz Tanıma</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Yüz Tanıma">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="apple-touch-icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' fill='%232563eb'/%3E%3Ctext x='50' y='68' font-size='60' text-anchor='middle'%3E%F0%9F%99%82%3C/text%3E%3C/svg%3E">
+<style>
+  :root { color-scheme: light dark; --bg:#fff; --fg:#111; --mut:#6b7280; --chip:#e5e7eb; --btn:#2563eb; --off:#9ca3af; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#111; --fg:#f3f4f6; --mut:#9ca3af; --chip:#2a2a2a; --off:#4b5563; } }
+  * { box-sizing: border-box; }
+  html, body { margin:0; background:var(--bg); color:var(--fg); font-family:-apple-system, system-ui, sans-serif; }
+  body { padding: env(safe-area-inset-top,0px) 14px env(safe-area-inset-bottom,0px); max-width: 900px; margin: 0 auto; }
+  .stage { background:#000; border-radius:16px; overflow:hidden; margin-top:12px; display:flex; justify-content:center; min-height:200px; }
+  canvas { width:100%; height:auto; max-height:62vh; object-fit:contain; display:block; }
+  video { display:none; }
+  .status { text-align:center; color:var(--mut); font-size:15px; margin:10px 0; }
+  .row { display:flex; align-items:center; gap:10px; margin:8px 0; font-size:15px; }
+  .row input[type=range] { flex:1; }
+  .scroll { overflow-x:auto; white-space:nowrap; -webkit-overflow-scrolling:touch; padding-bottom:4px; }
+  button, .btn { background:var(--btn); color:#fff; border:0; border-radius:10px; padding:9px 14px; font-size:15px; margin-right:6px; cursor:pointer; display:inline-block; }
+  button.off { background:var(--off); }
+  button.line, label.line { background:var(--chip); color:var(--fg); }
+  .chip { display:inline-flex; align-items:center; gap:6px; background:var(--chip); border-radius:99px; padding:6px 6px 6px 12px; margin-right:6px; font-size:15px; }
+  .chip b { cursor:pointer; background:#ef4444; color:#fff; border-radius:99px; width:22px; height:22px; display:inline-flex; align-items:center; justify-content:center; font-size:13px; }
+  .small { font-size:13px; color:var(--mut); }
+  .sw { display:flex; align-items:center; gap:6px; }
+  #dogbox { display:none; }
+</style>
+</head>
+<body>
+<div class="stage"><canvas id="c" width="640" height="480"></canvas></div>
+<video id="v" playsinline muted autoplay></video>
+<div class="status" id="status">Yükleniyor…</div>
+
+<div class="row"><span>Hassasiyet</span><input type="range" id="thr" min="0.3" max="0.9" step="0.01" value="0.55"><span id="thrv" style="width:40px">0.55</span></div>
+
+<div class="scroll" id="filters"></div>
+
+<div id="dogbox">
+  <div class="row">
+    <label class="btn line">Resim seç<input type="file" id="dogfile" accept="image/*" hidden></label>
+    <span class="small" id="dogmsg">Resim seçilmedi, basit çizim gösteriliyor</span>
+  </div>
+  <div class="row"><span>Boyut</span><input type="range" id="dscale" min="0.8" max="2.2" step="0.01" value="1.35"></div>
+  <div class="row"><span>Yükseklik</span><input type="range" id="dlift" min="-0.3" max="0.3" step="0.01" value="0"></div>
+</div>
+
+<div class="row">
+  <label class="sw"><input type="checkbox" id="flip"> Ters çevir</label>
+  <label class="sw"><input type="checkbox" id="mirror" checked> Aynala</label>
+</div>
+
+<div class="row">
+  <button id="add">Kişi ekle</button>
+  <div class="scroll" id="people"></div>
+</div>
+<div class="small">Silmek için kişinin yanındaki × işaretine dokun. Veriler sadece bu cihazda saklanır.</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.13/dist/face-api.js"></script>
+<script>
+const $ = id => document.getElementById(id);
+const video = $('v'), cv = $('c'), ctx = cv.getContext('2d', { willReadFrequently: true });
+const tmp = document.createElement('canvas'), tctx = tmp.getContext('2d');
+const MODELS = 'https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.13/model/';
+const SAMPLES = 15;
+const FILTERS = [['none','Normal'],['mono','Siyah-Beyaz'],['sepia','Sepya'],['invert','Negatif'],['comic','Çizgi'],['pixel','Piksel'],['dog','🐶 Köpek']];
+
+let filter = 'none', faces = [], ready = false, busy = false;
+let people = {}, enrollName = null, enrollLeft = 0, lastEnroll = 0, k = 1;
+try { people = JSON.parse(localStorage.getItem('faces') || '{}'); } catch (e) {}
+
+function status(t) { $('status').textContent = t; }
+function save() { try { localStorage.setItem('faces', JSON.stringify(people)); } catch (e) {} }
+
+// ---------- UI ----------
+function renderFilters() {
+  $('filters').innerHTML = '';
+  FILTERS.forEach(([id, label]) => {
+    const b = document.createElement('button');
+    b.textContent = label;
+    if (filter !== id) b.className = 'off';
+    b.onclick = () => { filter = id; $('dogbox').style.display = id === 'dog' ? 'block' : 'none'; renderFilters(); };
+    $('filters').appendChild(b);
+  });
+}
+function renderPeople() {
+  $('people').innerHTML = '';
+  Object.keys(people).sort().forEach(n => {
+    const s = document.createElement('span'); s.className = 'chip'; s.textContent = n;
+    const x = document.createElement('b'); x.textContent = '×';
+    x.onclick = () => { if (confirm(n + ' silinsin mi?')) { delete people[n]; save(); renderPeople(); status(n + ' silindi'); } };
+    s.appendChild(x); $('people').appendChild(s);
+  });
+}
+$('thr').oninput = e => $('thrv').textContent = (+e.target.value).toFixed(2);
+$('add').onclick = () => {
+  const n = (prompt('Kişinin adı') || '').trim();
+  if (!n) return;
+  enrollName = n; enrollLeft = SAMPLES; if (!people[n]) people[n] = [];
+  status('Kameraya bakın, başınızı hafifçe çevirin…');
+};
+renderFilters(); renderPeople();
+
+// ---------- Köpek resmi ----------
+let dogImg = null; // canvas veya image
+function removeWhite(img) {
+  const c = document.createElement('canvas'); c.width = img.naturalWidth || img.width; c.height = img.naturalHeight || img.height;
+  const x = c.getContext('2d'); x.drawImage(img, 0, 0);
+  const d = x.getImageData(0, 0, c.width, c.height), p = d.data;
+  let hasAlpha = false;
+  for (let i = 3; i < p.length; i += 4) if (p[i] < 255) { hasAlpha = true; break; }
+  if (!hasAlpha) for (let i = 0; i < p.length; i += 4) if (p[i] > 235 && p[i+1] > 235 && p[i+2] > 235) p[i+3] = 0;
+  x.putImageData(d, 0, 0);
+  return c;
+}
+function defaultDog() {
+  const W = 480, H = 551, c = document.createElement('canvas'); c.width = W; c.height = H;
+  const x = c.getContext('2d');
+  const el = (cx, cy, w, h, rot, col) => { x.save(); x.translate(cx, cy); x.rotate(rot); x.fillStyle = col; x.beginPath(); x.ellipse(0, 0, w / 2, h / 2, 0, 0, 7); x.fill(); x.restore(); };
+  el(W*.26, H*.22, W*.30, H*.24, -25*Math.PI/180, '#8b5a2b');
+  el(W*.79, H*.22, W*.30, H*.24, 25*Math.PI/180, '#8b5a2b');
+  el(W*.53, H*.66, W*.30, H*.14, 0, '#cc9966');
+  el(W*.53, H*.64, W*.14, H*.07, 0, 'rgba(0,0,0,.85)');
+  return c;
+}
+function setDog(src) {
+  if (!src) { dogImg = defaultDog(); return; }
+  const im = new Image();
+  im.onload = () => { dogImg = removeWhite(im); $('dogmsg').textContent = 'Resim yüklendi'; };
+  im.src = src;
+}
+try { const s = localStorage.getItem('dog'); if (s) { setDog(s); } else dogImg = defaultDog(); } catch (e) { dogImg = defaultDog(); }
+$('dogfile').onchange = e => {
+  const f = e.target.files[0]; if (!f) return;
+  const r = new FileReader();
+  r.onload = () => {
+    // küçültüp sakla
+    const im = new Image();
+    im.onload = () => {
+      const m = 800, s = Math.min(1, m / Math.max(im.width, im.height));
+      const c = document.createElement('canvas'); c.width = im.width * s; c.height = im.height * s;
+      c.getContext('2d').drawImage(im, 0, 0, c.width, c.height);
+      const url = c.toDataURL('image/png');
+      try { localStorage.setItem('dog', url); } catch (err) {}
+      setDog(url);
+    };
+    im.src = r.result;
+  };
+  r.readAsDataURL(f);
+};
+
+// ---------- Koordinat dönüşümü ----------
+function T(x, y) {
+  let X = x * k, Y = y * k;
+  if ($('flip').checked) { X = cv.width - X; Y = cv.height - Y; }
+  if ($('mirror').checked) { X = cv.width - X; }
+  return [X, Y];
+}
+
+// ---------- Çizim ----------
+function applyPixels(f) {
+  const d = ctx.getImageData(0, 0, cv.width, cv.height), p = d.data;
+  if (f === 'mono' || f === 'sepia') {
+    for (let i = 0; i < p.length; i += 4) {
+      const r = p[i], g = p[i+1], b = p[i+2], l = .299*r + .587*g + .114*b;
+      if (f === 'mono') { p[i] = p[i+1] = p[i+2] = l; }
+      else {
+        const tr = .393*r + .769*g + .189*b, tg = .349*r + .686*g + .168*b, tb = .272*r + .534*g + .131*b;
+        p[i] = Math.min(255, tr); p[i+1] = Math.min(255, tg); p[i+2] = Math.min(255, tb);
+      }
+    }
+  } else if (f === 'invert') {
+    for (let i = 0; i < p.length; i += 4) { p[i] = 255 - p[i]; p[i+1] = 255 - p[i+1]; p[i+2] = 255 - p[i+2]; }
+  } else if (f === 'comic') {
+    const w = cv.width, h = cv.height, lum = new Float32Array(w * h);
+    for (let i = 0, j = 0; i < p.length; i += 4, j++) lum[j] = .299*p[i] + .587*p[i+1] + .114*p[i+2];
+    for (let y = 1; y < h - 1; y++) for (let x = 1; x < w - 1; x++) {
+      const j = y * w + x, i = j * 4;
+      const gx = lum[j+1] - lum[j-1], gy = lum[j+w] - lum[j-w];
+      const edge = Math.abs(gx) + Math.abs(gy) > 60;
+      for (let c = 0; c < 3; c++) p[i+c] = edge ? 0 : Math.round(p[i+c] / 64) * 64;
+    }
+  }
+  ctx.putImageData(d, 0, 0);
+}
+function draw() {
+  requestAnimationFrame(draw);
+  if (!video.videoWidth) return;
+  const W = cv.width, H = cv.height;
+  ctx.save();
+  ctx.translate(W / 2, H / 2);
+  if ($('flip').checked) ctx.rotate(Math.PI);
+  if ($('mirror').checked) ctx.scale(-1, 1);
+  if (filter === 'pixel') {
+    tmp.width = Math.round(W / 24); tmp.height = Math.round(H / 24);
+    tctx.drawImage(video, 0, 0, tmp.width, tmp.height);
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(tmp, -W / 2, -H / 2, W, H);
+    ctx.imageSmoothingEnabled = true;
+  } else ctx.drawImage(video, -W / 2, -H / 2, W, H);
+  ctx.restore();
+  if (['mono', 'sepia', 'invert', 'comic'].includes(filter)) applyPixels(filter);
+
+  for (const f of faces) {
+    const [x1, y1] = T(f.box.x, f.box.y), [x2, y2] = T(f.box.x + f.box.width, f.box.y + f.box.height);
+    const x = Math.min(x1, x2), y = Math.min(y1, y2), w = Math.abs(x2 - x1), h = Math.abs(y2 - y1);
+    if (filter === 'dog') {
+      const dw = w * +$('dscale').value, dh = dw * (dogImg.height / dogImg.width);
+      const cx = x + w / 2 + (0.5 - 0.532) * dw;
+      const cy = y + h * (0.62 - +$('dlift').value) + (0.5 - 0.653) * dh;
+      ctx.drawImage(dogImg, cx - dw / 2, cy - dh / 2, dw, dh);
+    } else {
+      const col = f.known ? '#16a34a' : '#dc2626';
+      ctx.lineWidth = 3; ctx.strokeStyle = col; ctx.strokeRect(x, y, w, h);
+      ctx.font = 'bold 18px -apple-system, sans-serif';
+      const tw = ctx.measureText(f.name).width + 16;
+      ctx.fillStyle = col; ctx.fillRect(x, y - 28, tw, 26);
+      ctx.fillStyle = '#fff'; ctx.fillText(f.name, x + 8, y - 9);
+    }
+  }
+}
+
+// ---------- Algılama ----------
+function bestMatch(desc) {
+  let best = null;
+  for (const [n, arr] of Object.entries(people))
+    for (const a of arr) {
+      const d = faceapi.euclideanDistance(desc, a);
+      if (!best || d < best.d) best = { n, d };
+    }
+  return best;
+}
+async function detect() {
+  if (busy || !ready || !video.videoWidth) return;
+  busy = true;
+  try {
+    const res = await faceapi.detectAllFaces(video, new faceapi.TinyFaceDetectorOptions({ inputSize: 320, scoreThreshold: 0.5 }))
+      .withFaceLandmarks(true).withFaceDescriptors();
+    const thr = +$('thr').value, out = [];
+    for (const r of res) {
+      let name = 'Bilinmiyor', known = false;
+      const desc = Array.from(r.descriptor);
+      if (enrollName && enrollLeft > 0 && res.length === 1 && Date.now() - lastEnroll > 250) {
+        lastEnroll = Date.now();
+        people[enrollName].push(desc); enrollLeft--;
+        name = enrollName; known = true;
+        status('Kayıt: ' + enrollName + ' — ' + (SAMPLES - enrollLeft) + '/' + SAMPLES);
+        if (enrollLeft === 0) { status(enrollName + ' kaydedildi'); enrollName = null; save(); renderPeople(); }
+      } else {
+        const m = bestMatch(r.descriptor);
+        if (m && m.d < thr) { name = m.n; known = true; }
+      }
+      out.push({ box: r.detection.box, name, known });
+    }
+    faces = out;
+  } catch (e) { console.error(e); }
+  busy = false;
+}
+setInterval(detect, 100);
+
+// ---------- Başlat ----------
+(async function start() {
+  try {
+    status('Modeller yükleniyor…');
+    await Promise.all([
+      faceapi.nets.tinyFaceDetector.loadFromUri(MODELS),
+      faceapi.nets.faceLandmark68TinyNet.loadFromUri(MODELS),
+      faceapi.nets.faceRecognitionNet.loadFromUri(MODELS)
+    ]);
+    status('Kamera açılıyor…');
+    const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false });
+    video.srcObject = stream;
+    await video.play();
+    await new Promise(r => video.videoWidth ? r() : (video.onloadedmetadata = r));
+    cv.width = Math.min(960, video.videoWidth);
+    cv.height = Math.round(cv.width * video.videoHeight / video.videoWidth);
+    k = cv.width / video.videoWidth;
+    ready = true;
+    status('Hazır');
+    draw();
+  } catch (e) {
+    status('Hata: ' + (e.name === 'NotAllowedError' ? 'Kamera izni verilmedi' : e.message));
+  }
+})();
+</script>
+</body>
+</html>
