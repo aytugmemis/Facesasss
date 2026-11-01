@@ -70,8 +70,14 @@ const MODELS = 'https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.13/model/'
 const SAMPLES = 15;
 const FILTERS = [['none','Normal'],['mono','Siyah-Beyaz'],['sepia','Sepya'],['invert','Negatif'],['comic','Çizgi'],['pixel','Piksel'],['dog','🐶 Köpek']];
 
+// Doğum günü yazısındaki ismi buradan değiştir
+const BDAY_NAME = 'Yasin';
+const BDAY_TEXT = 'İyi ki doğdun ' + BDAY_NAME + '! 🎉';
+const CONFETTI_COLORS = ['#f43f5e', '#f59e0b', '#10b981', '#3b82f6', '#a855f7', '#eab308', '#ec4899'];
+
 let filter = 'none', faces = [], ready = false, busy = false;
 let people = {}, enrollName = null, enrollLeft = 0, lastEnroll = 0, k = 1;
+let confetti = [], textStart = 0;
 try { people = JSON.parse(localStorage.getItem('faces') || '{}'); } catch (e) {}
 
 function status(t) { $('status').textContent = t; }
@@ -84,7 +90,13 @@ function renderFilters() {
     const b = document.createElement('button');
     b.textContent = label;
     if (filter !== id) b.className = 'off';
-    b.onclick = () => { filter = id; $('dogbox').style.display = id === 'dog' ? 'block' : 'none'; renderFilters(); };
+    b.onclick = () => {
+      filter = id;
+      $('dogbox').style.display = id === 'dog' ? 'block' : 'none';
+      // Normal dışında bir filtre seçilince konfeti ve yazı başlar
+      if (id !== 'none') { textStart = performance.now(); spawnConfetti(160, true); }
+      renderFilters();
+    };
     $('filters').appendChild(b);
   });
 }
@@ -162,6 +174,56 @@ function T(x, y) {
   return [X, Y];
 }
 
+// ---------- Konfeti ve doğum günü yazısı ----------
+function spawnConfetti(n, burst) {
+  for (let i = 0; i < n; i++) {
+    confetti.push({
+      x: Math.random() * cv.width,
+      y: burst ? -Math.random() * cv.height * 0.6 : -10,
+      vx: (Math.random() - 0.5) * 2,
+      vy: 2 + Math.random() * 3,
+      s: 6 + Math.random() * 8,
+      c: CONFETTI_COLORS[(Math.random() * CONFETTI_COLORS.length) | 0],
+      r: Math.random() * 6.28,
+      vr: (Math.random() - 0.5) * 0.3,
+      w: Math.random() * 6.28,
+      round: Math.random() < 0.4
+    });
+  }
+}
+function drawConfetti() {
+  // Filtre açıkken sürekli yeni konfeti düşer
+  if (filter !== 'none' && confetti.length < 260 && Math.random() < 0.8) spawnConfetti(3, false);
+  for (let i = confetti.length - 1; i >= 0; i--) {
+    const p = confetti[i];
+    p.w += 0.08; p.x += p.vx + Math.sin(p.w) * 0.8; p.y += p.vy; p.r += p.vr;
+    if (p.y > cv.height + 20) { confetti.splice(i, 1); continue; }
+    ctx.save();
+    ctx.translate(p.x, p.y); ctx.rotate(p.r); ctx.fillStyle = p.c;
+    if (p.round) { ctx.beginPath(); ctx.arc(0, 0, p.s / 2, 0, 7); ctx.fill(); }
+    else ctx.fillRect(-p.s / 2, -p.s / 4, p.s, p.s / 2);
+    ctx.restore();
+  }
+}
+function drawBirthday() {
+  if (filter === 'none') return;
+  const t = (performance.now() - textStart) / 1000;
+  const fs = Math.max(20, cv.width * 0.065);
+  const pop = Math.min(1, t * 3);
+  const sc = (0.6 + 0.4 * pop) * (1 + 0.03 * Math.sin(t * 5));
+  ctx.save();
+  ctx.translate(cv.width / 2, fs * 1.4);
+  ctx.scale(sc, sc);
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.font = 'bold ' + fs + 'px -apple-system, system-ui, sans-serif';
+  ctx.lineJoin = 'round'; ctx.lineWidth = fs * 0.18; ctx.strokeStyle = 'rgba(0,0,0,.75)';
+  ctx.strokeText(BDAY_TEXT, 0, 0);
+  const g = ctx.createLinearGradient(-cv.width * 0.3, 0, cv.width * 0.3, 0);
+  g.addColorStop(0, '#fde047'); g.addColorStop(0.5, '#f472b6'); g.addColorStop(1, '#60a5fa');
+  ctx.fillStyle = g; ctx.fillText(BDAY_TEXT, 0, 0);
+  ctx.restore();
+}
+
 // ---------- Çizim ----------
 function applyPixels(f) {
   const d = ctx.getImageData(0, 0, cv.width, cv.height), p = d.data;
@@ -223,6 +285,9 @@ function draw() {
       ctx.fillStyle = '#fff'; ctx.fillText(f.name, x + 8, y - 9);
     }
   }
+
+  drawConfetti();
+  drawBirthday();
 }
 
 // ---------- Algılama ----------
