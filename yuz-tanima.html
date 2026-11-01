@@ -68,7 +68,7 @@ const video = $('v'), cv = $('c'), ctx = cv.getContext('2d', { willReadFrequentl
 const tmp = document.createElement('canvas'), tctx = tmp.getContext('2d');
 const MODELS = 'https://cdn.jsdelivr.net/npm/@vladmandic/face-api@1.7.13/model/';
 const SAMPLES = 15;
-const FILTERS = [['none','Normal'],['mono','Siyah-Beyaz'],['sepia','Sepya'],['invert','Negatif'],['comic','Çizgi'],['pixel','Piksel'],['dog','🐶 Köpek']];
+const FILTERS = [['none','Normal'],['mono','Siyah-Beyaz'],['sepia','Sepya'],['invert','Negatif'],['comic','Çizgi'],['pixel','Piksel'],['dog','🐶 Köpek'],['bday','🎉 Doğum günü']];
 
 // Doğum günü yazısındaki ismi buradan değiştir
 const BDAY_NAME = 'Yasin';
@@ -93,8 +93,8 @@ function renderFilters() {
     b.onclick = () => {
       filter = id;
       $('dogbox').style.display = id === 'dog' ? 'block' : 'none';
-      // Normal dışında bir filtre seçilince konfeti ve yazı başlar
-      if (id !== 'none') { textStart = performance.now(); spawnConfetti(160, true); }
+      // Doğum günü filtresi seçilince konfeti ve yazı başlar
+      if (id === 'bday') { textStart = performance.now(); spawnConfetti(160, true); }
       renderFilters();
     };
     $('filters').appendChild(b);
@@ -192,8 +192,8 @@ function spawnConfetti(n, burst) {
   }
 }
 function drawConfetti() {
-  // Filtre açıkken sürekli yeni konfeti düşer
-  if (filter !== 'none' && confetti.length < 260 && Math.random() < 0.8) spawnConfetti(3, false);
+  // Doğum günü filtresi açıkken sürekli yeni konfeti düşer
+  if (filter === 'bday' && confetti.length < 260 && Math.random() < 0.8) spawnConfetti(3, false);
   for (let i = confetti.length - 1; i >= 0; i--) {
     const p = confetti[i];
     p.w += 0.08; p.x += p.vx + Math.sin(p.w) * 0.8; p.y += p.vy; p.r += p.vr;
@@ -206,7 +206,7 @@ function drawConfetti() {
   }
 }
 function drawBirthday() {
-  if (filter === 'none') return;
+  if (filter !== 'bday') return;
   const t = (performance.now() - textStart) / 1000;
   const fs = Math.max(20, cv.width * 0.065);
   const pop = Math.min(1, t * 3);
